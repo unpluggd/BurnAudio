@@ -1,4 +1,4 @@
-#!/usr/bin/env python2.6
+#!/usr/bin/env python2.7
 
 '''
 Based on: http://www.math.columbia.edu/~bayer/Python/iTunes/iTunes.py
@@ -9,15 +9,25 @@ import sys
 import shlex
 import subprocess
 import tempfile
+import time
 import argparse
 from datetime import datetime
 from shutil import copyfile
-from multiprocessing import Process
+from multiprocessing import Process, Pool
 
 from appscript import *
 
 iTunes = None
 tempfile.tempdir = '/tmp'
+
+FAAD = ''.join(os.popen('which faad').readlines()).strip()
+LAME = ''.join(os.popen('which lame').readlines()).strip()
+
+if FAAD[5:] == 'not found':
+  raise SystemExit('faad is not available. Cannot continue.')
+
+if LAME[5:] == 'not found':
+  raise SystemExit('lame is not available. Cannot continue.')
 
 __cd_size__ = 734000000
 
@@ -106,9 +116,9 @@ def get_all_tracks_details(name):
 
 
 def convert_aac_to_mp3(artist, title, tracknum, location, outdir, quality):
-  print "  Processing: %s - %s - %s..." % (artist, title, tracknum), 
-  _decode = shlex.split(str('faad -q -o - "%s"' % location))
-  _encode = shlex.split(str('lame -h -S -b %s - "%s/%s - %s - %s.mp3"' % (
+  _decode = shlex.split(str('%s -q -o - "%s"' % (FAAD, location)))
+  _encode = shlex.split(str('%s -h -S -b %s - "%s/%s - %s - %s.mp3"' % (
+    LAME,
     quality,
     outdir, 
     artist,
@@ -118,7 +128,7 @@ def convert_aac_to_mp3(artist, title, tracknum, location, outdir, quality):
   encode = subprocess.Popen(_encode,
                             stdin=decode.stdout, stdout=subprocess.PIPE)
   output = encode.communicate()[0]
-  print "done."
+  print "  .. processed: %s - %s - %s" % (artist, title, tracknum)
 
 
 def copy_mp3(artist, title, tracknum, location, outdir, *args, **kwargs):
@@ -134,7 +144,7 @@ if __name__ == '__main__':
   parser.add_argument(
     '--quality',
     dest='quality',
-    default='high',
+    default=['med'],
     choices=['low','med','high'],
     nargs=1,
     help='Quality of output MP3 audio file'
@@ -181,51 +191,66 @@ if __name__ == '__main__':
 
   print "done."
 
-  outputdir = tempfile.mkdtemp(prefix='BurnAudio-')
+  outputdir = tempfile.mkdtemp(prefix='EncodeAudio-')
 
-  for playlist, tracks in __track_lists__.iteritems():
-    print
-    print "Processing playlist: %s" % playlist
-    playlistdir = outputdir+'/'+playlist
-    os.mkdir(playlistdir)
-    for track in tracks:
-      if is_track_transcodeable(track['kind']):
-        target = convert_aac_to_mp3
-      else:
-        target = copy_mp3
+  pool = Pool(processes=5)
+
+  try:
+    for playlist, tracks in __track_lists__.iteritems():
+
+      print "Processing playlist: %s" % playlist
+      playlistdir = outputdir+'/'+playlist
+
+      print "  .. creating tmp dir: %s" % playlistdir
+      os.mkdir(playlistdir)
+
+      print "  .. processing %d tracks" % len(tracks)
+      
+      for track in tracks:
+        if is_track_transcodeable(track['kind']):
+          target = convert_aac_to_mp3
+        else:
+          target = copy_mp3
+
+        if not os.path.isfile(track['abspath']):
+          print '> .. file "%s" does not exist' % track['abspath']
+          continue
+        else:
+          print '  .. adding to pool: %s - %s' % (track['artist'], track['title'])
  
-      p = Process(target=target,
-                  args=(
-                    track['artist'], 
-                    track['title'], 
-                    track['number'],
-                    track['abspath'], 
-                    playlistdir,
-                    __quality__[args.quality[0]]
-                    ))
-      p.start()
-      p.join()
+        result = pool.apply_async(target,
+                    args=(
+                      track['artist'], 
+                      track['title'], 
+                      track['number'],
+                      track['abspath'], 
+                      playlistdir,
+                      __quality__[args.quality[0]]
+                      ))
+    print "  .. processing pool, please wait..."
+    pool.close()
+    pool.join()
 
-      #target(track['artist'], track['title'], track['abspath'], playlistdir)
+  except:
+    pool.terminate()
+    raise SystemExit('Error encountered while processing. Terminating run.')
 
-  print "Creating disk image...",
-
-  diskname = 'BurnAudio-%s' % datetime.utcnow().strftime('%Y-%m-%d')
+  diskdir = tempfile.mkdtemp(prefix='BurnAudio-')
+  diskname = 'Music-%s' % datetime.utcnow().strftime('%Y%m%d')
 
   shlex.split(str('rm -f /tmp/%(name)s.iso' % {'name': diskname }))
 
-  mkdisk = shlex.split(str('hdiutil makehybrid -iso -joliet-volume-name %(name)s -joliet -o /tmp/%(name)s.iso %(dir)s' % {'name': diskname, 'dir': outputdir }))
+  mkdisk = shlex.split(str('hdiutil makehybrid -iso -joliet-volume-name %(name)s -joliet -o %(diskdir)s/%(name)s.iso %(dir)s' % {'name': diskname, 'dir': outputdir, 'diskdir': diskdir }))
   subprocess.call(mkdisk)
 
-  print "done."
+  do_burn = raw_input('Continue to burn CD? (y/N)')
 
-  print "Burning disk image...",
+  if do_burn.strip().lower() != 'y':
+    raise SystemExit('Exiting at user request.')
 
-  subprocess.call(shlex.split(str("hdiutil burn /tmp/%s.iso" % diskname)))
+  subprocess.call(shlex.split(str("hdiutil burn %s/%s.iso" % (diskdir, diskname))))
 
-  print
-  print "Completed."
-  print
+  print "\nCompleted.\n"
 
   subprocess.call(['drutil', 'eject'])
 
