@@ -2,6 +2,10 @@
 
 '''
 Based on: http://www.math.columbia.edu/~bayer/Python/iTunes/iTunes.py
+
+Todo:
+- replace print with logging
+- clean-up functions
 '''
 
 import os
@@ -194,7 +198,7 @@ if __name__ == '__main__':
   outputdir = tempfile.mkdtemp(prefix='EncodeAudio-')
 
   pool = Pool(processes=5)
-
+  '''
   try:
     for playlist, tracks in __track_lists__.iteritems():
 
@@ -234,6 +238,7 @@ if __name__ == '__main__':
   except:
     pool.terminate()
     raise SystemExit('Error encountered while processing. Terminating run.')
+  '''
 
   diskdir = tempfile.mkdtemp(prefix='BurnAudio-')
   diskname = 'Music-%s' % datetime.utcnow().strftime('%Y%m%d')
@@ -247,6 +252,8 @@ if __name__ == '__main__':
 
   if do_burn.strip().lower() != 'y':
     raise SystemExit('Exiting at user request.')
+
+  print "Actual burn size: %s bytes" % os.path.getsize('%s/%s.iso'% (diskdir, diskname))
 
   subprocess.call(shlex.split(str("hdiutil burn %s/%s.iso" % (diskdir, diskname))))
 
